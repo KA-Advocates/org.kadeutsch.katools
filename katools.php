@@ -440,6 +440,7 @@ function katools_civicrm_emailProcessor( $type, &$params, $mail, &$result, $acti
 	}
 }
 
+// Add a Tabset to Display Crowdin Data
 function katools_civicrm_tabset( $tabsetName, &$tabs, $context ) {
 	if ($tabsetName == 'civicrm/contact/view') {
 		$contactId = $context['contact_id'];
@@ -464,11 +465,13 @@ function katools_civicrm_tokens(&$tokens) {
     $tokens['contact'] = array(
         'contact.untertitel_tasks' => 'persoehnliche Pendenzen Untertitel-Team',
     );
+	
+  $tokens['date'] = array(
+    'date.date_month' => 'Aktueller Monat',
+    'date.date_week' => 'Aktuelle Woche: WW/yyyy',
+    'date.date_long' => 'Heutiges Datum: Month dth, yyyy',
+  );	
 }
-
-//function hook_civicrm_tokens(&$tokens) {
-//  $tokens['contact']['contact.subtitle_tasks'] = 'Pending Tasks';
-//}
 
 // Function to convert CSV into associative array
 function csvToArray($file, $delimiter) {
@@ -485,62 +488,155 @@ function csvToArray($file, $delimiter) {
   return $arr; 
 }
 
+function subst($str, $dict){
+    return preg_replace(array_map(create_function('$a', 'return "/%\\($a\\)s/";'), array_keys($dict)), array_values($dict), $str);
+ }
+
+//#Function to process a Backlog-File
+function processBacklog(&$strings, $cids, $bl, $log) {
+	
+	fwrite($log, "loading CSV Array from Google Spreadsheet\n\n");
+	//load the Field Configuration
+	$cfg = $bl["fields"];
+	
+	// load date from Web
+	$backlog = csvToArray($bl["backlogURL"], ',');
+	$team = csvToArray($bl["teamURL"], ',');
+	
+	//Use first row for names
+	$backLogLabels = array_shift($backlog);
+	$teamLabels = array_shift($team);
+	
+	foreach ($team as &$contact) {
+
+		$cid = $contact[ $cfg["contact"]];
+		if ( in_array( $contact[ $cfg["contact"] ], $cids) ) {
+			//fwrite($log, "contact matched " . $video[8] . "\n");
+			
+			$nickname = $contact[ $cfg["nickname"] ];
+			
+			// Initialize array to return assigned tasks
+			if ( !array_key_exists($cid, $strings ) ) {
+				$strings[ $cid  ]  = array(
+					"assigned" => array(),
+					"review" => array(),
+				);
+			}				
+			
+			foreach($backlog as $video) {
+					
+				// check for item matching nickname and status column --> assigned workitems
+				if ( $video[ $cfg["assignedNickname"]] == $nickname && in_array($video[ $cfg["status"] ], $cfg["assignedStatus"] ) ) {
+					
+					//$strings[$cid]["assigned"][] = '<li>Bitte übersetze : <a href="https://www.youtube.com/timedtext_video?v=' . $video[4] . '">' . $video[5] . ", Dauer : " . $video[6] . "</a></li>\n";
+					$str = str_replace("{URL}",  $cfg["editURL"]($video), $cfg["assignedStr"] );
+					$strings[$cid]["assigned"][] =  subst( $str, $video );
+				}
+				// check for item matching nickname and status column --> assigned reviewitems				
+				if ( $video[$cfg["reviewNickname"]] == $nickname && in_array( $video[$cfg["status"]], $cfg["reviewStatus"]) ) {
+					
+					//$str = str_replace("{URL}", urlencode(subst( $cfg["reviewUrl"], $video)), $cfg["reviewStr"]);
+					$str = str_replace("{URL}",  $cfg["reviewURL"]($video), $cfg["reviewStr"] );
+					$strings[$cid]["review"][] = subst( $str, $video) ;
+				}
+					
+			}
+
+			
+			
+		}
+	}	
+}
+
+// Hook to process 
 function katools_civicrm_tokenValues(&$values, $cids, $job = null, $tokens = array(), $context = null) {
-	// Set your CSV feed the Key is generated where?
-	$backlogURL = 'https://docs.google.com/spreadsheets/d/1-1rM_MyfxXuX7aT1k8D4HLQ_IwFgMDGXIbCH-3zUIMQ/pub?gid=1144837871&single=true&output=csv';  // this is the link to the backlog v2 TAB
-	$teamURL = 'https://docs.google.com/spreadsheets/d/1-1rM_MyfxXuX7aT1k8D4HLQ_IwFgMDGXIbCH-3zUIMQ/pub?gid=52742320&single=true&output=csv';
+    // Define the Backlog CSV Files to be parsed
+	$backlogs = array(
+		array(
+		"backlogURL" => 'https://docs.google.com/spreadsheets/d/1-1rM_MyfxXuX7aT1k8D4HLQ_IwFgMDGXIbCH-3zUIMQ/pub?gid=1144837871&single=true&output=csv',  // this is the link to the backlog tab in UT Backlog
+		"teamURL" => 'https://docs.google.com/spreadsheets/d/1-1rM_MyfxXuX7aT1k8D4HLQ_IwFgMDGXIbCH-3zUIMQ/pub?gid=52742320&single=true&output=csv',
+		"fields" => array( "contact" => 0, "nickname" => 3, "assignedNickname" => 8, "status" => 12, "reviewNickname" => 10, "reviewStatus" => 12,
+					"assignedStatus" => array( "Zugewiesen", "in Arbeit", "Zurueckgewiesen"),
+					"assignedStr" => '<li>Bitte übersetze den Untertitel : <a href="{URL}">%(5)s, Dauer : %(6)s</a></li>',
+					"editURL" => function($data) {
+						return "https://www.youtube.com/timedtext_video?v=" . $data[4];
+					},
+					"reviewStatus" => array("Uebersetzt"),
+					"reviewStr" => '<li>%(8)s wartet seit dem %(9)s auf dein Review von <a href="{URL}">%(5)s</a></li>',
+					"reviewURL" => function($data) {
+						return 'https://docs.google.com/forms/d/1lxKLZinyitDQb-tSGmRNWGtsPDQG2iGXZRlyuvcxrLA/viewform?entry.675763289='.$data[5].'&entry.643804832='.$data[4].'&entry.1356226264='.$data[10].'&entry.1511908839='.$data[8];
+					},
+					),
+		),
+		array(
+		"backlogURL" => 'https://docs.google.com/spreadsheets/d/10tYCC84PonnH69cOX2j8dADDRZzAl65-Ou6jXlts_do/pub?gid=1144837871&single=true&output=csv',  // this is the link to the backlog tab in Crowdin Backlog
+		"teamURL" => 'https://docs.google.com/spreadsheets/d/10tYCC84PonnH69cOX2j8dADDRZzAl65-Ou6jXlts_do/pub?gid=52742320&single=true&output=csv',
+		"fields" => array(
+					"contact" => 0, "nickname" => 3, "assignedNickname" => 14, "status" => 10, "reviewNickname" => 16, "reviewStatus" => 10,
+					"assignedStatus" => array( "TODO"),
+					"assignedStr" => '<li>Bitte übersetze : <a href="{URL}">%(3)s: %(5)s, %(6)s Wörter</a></li>',
+					'editURL' => function($data) {
+						  if ($data[3] == "Article")
+							return "https://translate.khanacademy.org/a/".$data[4];
+						  else
+							return "https://de.khanacademy.org/translations/edit/de/e/" . $data[4];
+					},
+					"reviewStatus" => array("Translated"),
+					"reviewStr" => '<li>%(14)s wartet seit dem %(15)s auf dein Approval von <a href="{URL}">%(3)s: %(5)s</a></li>',
+					"reviewURL" => function($data) {
+						return "https://crowdin.com/proofread/khanacademy/all/enus-de#q=". $data[4];
+					},					
+					),
+		),		
+	);
 
     $tokens += array(
     'contact' => array(),
     );
     $log = fopen("/tmp/utTaskMaillog.txt", "a");
     
+	// Process the Mail Merge Tag untertitel_tasks --> should be changed to kadeutsch_tasks
     if (in_array('untertitel_tasks', $tokens['contact'])) {
 		
-        fwrite($log, "loading CSV Array from Google Spreadsheet\n\n");
-        // load date from Web
-        $backlog= csvToArray($backlogURL, ',');
-        $team= csvToArray($teamURL, ',');
-        
-        //Use first row for names
-        $backLogLabels = array_shift($backlog);
-        $teamLabels = array_shift($team);
-        
-        foreach ($team as &$contact) {
+		$strings = array( );
+		
+		foreach( $backlogs as $backlog ) {
+			processBackLog( $strings, $cids, $backlog, $log);
+		}
 
-            if ( in_array( $contact[0], $cids) ) {
-                fwrite($log, "contact matched " . $video[8] . "\n");
-                
-                $nickname = $contact[2];
-                $assigned = array();
-                $review = array();
-                
-                foreach($backlog as $video) {	
-                        
-                    if ( $video[8] == $nickname && ($video[12] == "Zugewiesen" or $video[12] == "in Arbeit" or $video[12] == "Zurueckgewiesen" ) ) {
-                        
-                        $assigned[] = '<li>Bitte übersetze : <a href="https://www.youtube.com/timedtext_video?v=' . $video[4] . '">' . $video[5] . ", Dauer : " . $video[6] . "</a></li>\n";
-                    }
-                    if ( $video[10] == $nickname && ($video[12] == "Uebersetzt") ) {
-                        $review[] =  "<li>" . $video[8] . ' wartet seit dem ' . $video[9] . ' auf dein Review von <a href="https://docs.google.com/forms/d/1lxKLZinyitDQb-tSGmRNWGtsPDQG2iGXZRlyuvcxrLA/viewform?entry.675763289='
-                            . urlencode($video[5]) . "&entry.643804832=" . urlencode($video[4]) . "&entry.1356226264=" . urlencode($video[10]) . "&entry.1511908839=" . urlencode($video[8]) . '">' . $video[5] . "</a></li>\n";
-                    }
-                        
-                }
-                $backlogURL2 = "https://docs.google.com/spreadsheets/d/1-1rM_MyfxXuX7aT1k8D4HLQ_IwFgMDGXIbCH-3zUIMQ/edit?pli=1#gid=1144837871";
-                if ( count($assigned) > 0 or count($review) > 0 ) {
-                    $msg = "\nFolgende Untertitel sind pendent zum Übersetzen oder sollten von dir reviewed werden:";
-                    $msg .= "<ul>" . implode($assigned) . implode($review) . "</ul>Bitte erledige diese und aktualisiere dann das <a href='".$backlogURL2."'>Backlog</a>.";
-                } else {
-                    $msg = "\nDu hast momentan keine pendenten Untertitel zum Übersetzen oder reviewen.<br/>\n";
-                }
+		
+		foreach( $strings as $cid => $string ) {
+			$assigned = $string["assigned"];
+			$review = $string["review"];		
+			
+			$backlogURL1 = "https://docs.google.com/spreadsheets/d/1-1rM_MyfxXuX7aT1k8D4HLQ_IwFgMDGXIbCH-3zUIMQ/edit?pli=1#gid=1144837871";
+			$backlogURL2 = "https://docs.google.com/spreadsheets/d/10tYCC84PonnH69cOX2j8dADDRZzAl65-Ou6jXlts_do/edit#gid=1144837871";
+			if ( count($assigned) > 0 or count($review) > 0 ) {
+				$msg = "\nDu hast momentan folgende pendente Aufgaben zum Übersetzen oder Review:";
+				$msg .= "<ul>" . implode($assigned) . implode($review) . "</ul>Bitte erledige diese und aktualisiere dann das Backlog. </ul>";
+				
+				$msg .= "Backlog URLs:<br/><ul><li><a href='".$backlogURL1."'>Untertitel-Backlog</a></li><li><a href='".$backlogURL2."'>Crowdin-Backlog</a></li>.";
+			} else {
+				$msg = "\nDu hast momentan keine pendenten Aufgaben zum Übersetzen oder Review, such dir im Backlog ein paar freie Aufgaben aus!<br/>\n";
+			}
 
-                fwrite($log, $msg);
+			fwrite($log, $msg);
 
-                $values[$contact[0]]['contact.untertitel_tasks'] = $msg;
-            }
-        }
+			$values[$cid]['contact.untertitel_tasks'] = $msg;
+		}
     }
+	
+		// Date tokens
+		if (!empty($tokens['date'])) {
+		$date = array(
+			'date.date_month' => date('F'),
+			'date.date_week' => date('W/Y'),
+			'date.date_long' => date('F jS, Y'),
+    );
+		foreach ($cids as $cid) {
+			$values[$cid] = empty($values[$cid]) ? $date : $values[$cid] + $date;
+		}
+	}
     
     fwrite($log, date("d.m.Y") . "tokenValue finished\n\n");
 	fclose($log);

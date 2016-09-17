@@ -1,5 +1,6 @@
 <?php
 
+
 /**
  * Contact.Updatecrowdinactivity API specification (optional)
  * This is used for documentation and validation.
@@ -12,7 +13,8 @@ function _civicrm_api3_contact_Updatecrowdinactivity_spec(&$spec) {
   //$spec['magicword']['api.required'] = 1;
 }
 
-function loadActivity($conn, $date_to="") {
+// loadt the Crowdin Activity Data from JSON into database table
+function loadCrowdinActivity($conn, $date_to="") {
         #Now loading the activities
         $activityURL = "https://crowdin.com/project_actions/activity_stream?project_id=10880&language_id=11&show_activity=";
 		if ($date_to <> "") {
@@ -38,7 +40,7 @@ function loadActivity($conn, $date_to="") {
 			//print $username . "\n";
 			//print(date("F j, Y, g:i a", $ts)."\n");
 		
-			// first try to find a matching user account
+			// first try to find a matching user account and set the crowdin UserID and LastActivity Fields
 			$sql = "SELECT * from civicrm_value_crowdin_5 where crowdin_username_1 = '$username'";
 			if ( $result = $conn->query($sql) ) {
 				$row = $result->fetch_row();
@@ -62,6 +64,7 @@ function loadActivity($conn, $date_to="") {
 			// import all fields into the database
 			$sql = "SELECT * from civicrm_crowdin_activity where civicrm_crowdin_activity.id = $id";
 
+			//import activity only once, ignore subsequent activiyIDs
 			if ( $result = $conn->query($sql)) {
 				if ( $result->num_rows == 0 ) {				
 					$sql = "INSERT INTO civicrm_crowdin_activity (id, userID, datetime, activity, count) VALUES ($id, $userId, '$datetime', '$act', $count)";
@@ -77,7 +80,8 @@ function loadActivity($conn, $date_to="") {
 		return $date_to;
 }
 
-function updateActivityStat($conn) {
+// Update the Custom Fields in CiviCRM
+function updateCrowdinActivityStat($conn) {
 	
 	//First need to reset the activity fields to 0
 	$sql = "UPDATE civicrm_value_crowdin_5 SET activity_30_days_55=0, activity_3_month_57=0";
@@ -116,21 +120,23 @@ function updateActivityStat($conn) {
  * @throws API_Exception
  */
 function civicrm_api3_contact_Updatecrowdinactivity($params) {
+	global $crowdinLog, $db_host, $db, $pw; 
+	
 	$error = 0;
   
 	$crowdinLog = fopen("/tmp/crowdinlog.txt", "a");
 	fwrite($crowdinLog, "Running Crowdin ActivityLog\n\n");
+	require_once 'credentials.php';
   
-	$conn = new mysqli('localhost', 'alanisql6', 'iOWEyNWZjM');
+	$conn = new mysqli($ka_db_host, $ka_db, $ka_pw);
 	if ($conn->connect_error) {
 		die("Connection failed: " . $conn->connect_error);
 	}
 	$conn->select_db("kadeutsch_civicrm");	  
   
 	$date_to="";
-	$date_to = loadActivity($conn, $date_to); 
-	
-	updateActivityStat($conn);
+	$date_to = loadCrowdinActivity($conn, $date_to); 
+	updateCrowdinActivityStat($conn);
 	
 	fwrite($crowdinLog, "Crowdin ActivityLog finished\n\n");
 	fclose($crowdinLog);
